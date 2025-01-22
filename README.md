@@ -9,24 +9,16 @@
 ## 🎥Video Examples
 Below are example videos showcasing the enhanced video quality achieved through STG:
 
-### HunyuanVideo
-
-
-https://github.com/user-attachments/assets/8d98c1ff-4e34-467c-98f4-f4825715b5d0
-
-
-https://github.com/user-attachments/assets/0a165143-cea8-4936-98e0-b6069129a3e0
-
-
-
-
 ### Mochi
 
 
-https://github.com/user-attachments/assets/b576ca62-b058-4ef7-9bf9-13c3d64f0da0
+https://github.com/user-attachments/assets/b8795d10-b7dd-4928-84b0-1335fac1af03
 
 
-https://github.com/user-attachments/assets/7e22c92d-0ea9-425c-a090-ce6bae07a71c
+
+
+https://github.com/user-attachments/assets/7eb5391c-f655-4e42-b704-df9b6125dea1
+
 
 
 ### CogVideoX
@@ -38,6 +30,27 @@ https://github.com/user-attachments/assets/adc5af40-e50d-4b00-b98b-8e88ee04bae8
 https://github.com/user-attachments/assets/fcb8a078-58a5-4e62-a55e-662a0b08216b
 
 
+### SVD (Stable Video Diffusion)
+
+
+
+https://github.com/user-attachments/assets/5d11b8dc-e63d-4ac9-80d8-c81735fcf181
+
+
+
+https://github.com/user-attachments/assets/29afec1b-f137-48d4-b237-e2058431ccee
+
+
+### HunyuanVideo
+
+
+https://github.com/user-attachments/assets/8d98c1ff-4e34-467c-98f4-f4825715b5d0
+
+
+https://github.com/user-attachments/assets/0a165143-cea8-4936-98e0-b6069129a3e0
+
+
+
 
 
 ### LTX-Video
@@ -46,10 +59,6 @@ https://github.com/user-attachments/assets/fcb8a078-58a5-4e62-a55e-662a0b08216b
 https://github.com/user-attachments/assets/4cd722cd-c6e8-428d-8183-65e5954a930b
 
 
-### SVD (Stable Video Diffusion)
-
-
-https://github.com/user-attachments/assets/05994a52-1e9f-4b3c-ae20-dfccfc94e3db
 
 
 
