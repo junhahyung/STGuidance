@@ -18,8 +18,8 @@ pipe = pipe.to("cuda")
 #--------Option--------#
 prompt = "A slow-motion capture of a beautiful woman in a flowing dress spinning in a field of sunflowers, with petals swirling around her, realistic style."
 stg_mode = "STG-R" 
-stg_applied_layers_idx = [35]
-stg_scale = 0.8 # 0.0 for CFG (default)
+stg_applied_layers_idx = [10]
+stg_scale = 1.0 # 0.0 for CFG (default)
 do_rescaling = True # False (default)
 #----------------------#
 
