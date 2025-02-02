@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import types
 import inspect
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union, Tuple
 
 import numpy as np
 import torch
@@ -63,13 +64,61 @@ EXAMPLE_DOC_STRING = """
         ```
 """
 
+def forward_with_stg(
+        self,
+        hidden_states: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
+        temb: torch.Tensor,
+        encoder_attention_mask: torch.Tensor,
+        image_rotary_emb: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+
+        hidden_states_ptb = hidden_states[2:]
+        encoder_hidden_states_ptb = encoder_hidden_states[2:]
+        norm_hidden_states, gate_msa, scale_mlp, gate_mlp = self.norm1(hidden_states, temb)
+
+        if not self.context_pre_only:
+            norm_encoder_hidden_states, enc_gate_msa, enc_scale_mlp, enc_gate_mlp = self.norm1_context(
+                encoder_hidden_states, temb
+            )
+        else:
+            norm_encoder_hidden_states = self.norm1_context(encoder_hidden_states, temb)
+
+        attn_hidden_states, context_attn_hidden_states = self.attn1(
+            hidden_states=norm_hidden_states,
+            encoder_hidden_states=norm_encoder_hidden_states,
+            image_rotary_emb=image_rotary_emb,
+            attention_mask=encoder_attention_mask,
+        )
+
+        hidden_states = hidden_states + self.norm2(attn_hidden_states, torch.tanh(gate_msa).unsqueeze(1))
+        norm_hidden_states = self.norm3(hidden_states, (1 + scale_mlp.unsqueeze(1).to(torch.float32)))
+        ff_output = self.ff(norm_hidden_states)
+        hidden_states = hidden_states + self.norm4(ff_output, torch.tanh(gate_mlp).unsqueeze(1))
+        
+        if not self.context_pre_only:
+            encoder_hidden_states = encoder_hidden_states + self.norm2_context(
+                context_attn_hidden_states, torch.tanh(enc_gate_msa).unsqueeze(1)
+            )
+            norm_encoder_hidden_states = self.norm3_context(
+                encoder_hidden_states, (1 + enc_scale_mlp.unsqueeze(1).to(torch.float32))
+            )
+            context_ff_output = self.ff_context(norm_encoder_hidden_states)
+            encoder_hidden_states = encoder_hidden_states + self.norm4_context(
+                context_ff_output, torch.tanh(enc_gate_mlp).unsqueeze(1)
+            )
+
+            hidden_states[2:] = hidden_states_ptb
+            encoder_hidden_states[2:] = encoder_hidden_states_ptb
+
+        return hidden_states, encoder_hidden_states
+
 class STGMochiAttnProcessor2_0:
     """Attention processor used in Mochi."""
 
-    def __init__(self, mode="STG-R"):
+    def __init__(self):
         if not hasattr(F, "scaled_dot_product_attention"):
             raise ImportError("MochiAttnProcessor2_0 requires PyTorch 2.0. To use it, please upgrade PyTorch to 2.0.")
-        self.mode = mode
 
     def __call__(
         self,
@@ -156,79 +205,79 @@ class STGMochiAttnProcessor2_0:
             encoder_hidden_states_org = attn.to_add_out(encoder_hidden_states_org)
 
         #--------------perturb----------------#
-        if self.mode == "STG-A":
-            query_ptb = attn.to_q(hidden_states_ptb)
-            key_ptb = attn.to_k(hidden_states_ptb)
-            value_ptb = attn.to_v(hidden_states_ptb)
+        query_ptb = attn.to_q(hidden_states_ptb)
+        key_ptb = attn.to_k(hidden_states_ptb)
+        value_ptb = attn.to_v(hidden_states_ptb)
 
-            query_ptb = query_ptb.unflatten(2, (attn.heads, -1))
-            key_ptb = key_ptb.unflatten(2, (attn.heads, -1))
-            value_ptb = value_ptb.unflatten(2, (attn.heads, -1))
+        query_ptb = query_ptb.unflatten(2, (attn.heads, -1))
+        key_ptb = key_ptb.unflatten(2, (attn.heads, -1))
+        value_ptb = value_ptb.unflatten(2, (attn.heads, -1))
 
-            if attn.norm_q is not None:
-                query_ptb = attn.norm_q(query_ptb)
-            if attn.norm_k is not None:
-                key_ptb = attn.norm_k(key_ptb)
+        if attn.norm_q is not None:
+            query_ptb = attn.norm_q(query_ptb)
+        if attn.norm_k is not None:
+            key_ptb = attn.norm_k(key_ptb)
 
-            encoder_query_ptb = attn.add_q_proj(encoder_hidden_states_ptb)
-            encoder_key_ptb = attn.add_k_proj(encoder_hidden_states_ptb)
-            encoder_value_ptb = attn.add_v_proj(encoder_hidden_states_ptb)
+        encoder_query_ptb = attn.add_q_proj(encoder_hidden_states_ptb)
+        encoder_key_ptb = attn.add_k_proj(encoder_hidden_states_ptb)
+        encoder_value_ptb = attn.add_v_proj(encoder_hidden_states_ptb)
 
-            encoder_query_ptb = encoder_query_ptb.unflatten(2, (attn.heads, -1))
-            encoder_key_ptb = encoder_key_ptb.unflatten(2, (attn.heads, -1))
-            encoder_value_ptb = encoder_value_ptb.unflatten(2, (attn.heads, -1))
+        encoder_query_ptb = encoder_query_ptb.unflatten(2, (attn.heads, -1))
+        encoder_key_ptb = encoder_key_ptb.unflatten(2, (attn.heads, -1))
+        encoder_value_ptb = encoder_value_ptb.unflatten(2, (attn.heads, -1))
 
-            if attn.norm_added_q is not None:
-                encoder_query_ptb = attn.norm_added_q(encoder_query_ptb)
-            if attn.norm_added_k is not None:
-                encoder_key_ptb = attn.norm_added_k(encoder_key_ptb)
+        if attn.norm_added_q is not None:
+            encoder_query_ptb = attn.norm_added_q(encoder_query_ptb)
+        if attn.norm_added_k is not None:
+            encoder_key_ptb = attn.norm_added_k(encoder_key_ptb)
 
-            if image_rotary_emb is not None:
-                query_ptb = apply_rotary_emb(query_ptb, *image_rotary_emb)
-                key_ptb = apply_rotary_emb(key_ptb, *image_rotary_emb)
+        if image_rotary_emb is not None:
+            query_ptb = apply_rotary_emb(query_ptb, *image_rotary_emb)
+            key_ptb = apply_rotary_emb(key_ptb, *image_rotary_emb)
 
-            query_ptb, key_ptb, value_ptb = query_ptb.transpose(1, 2), key_ptb.transpose(1, 2), value_ptb.transpose(1, 2)
-            encoder_query_ptb, encoder_key_ptb, encoder_value_ptb = (
-                encoder_query_ptb.transpose(1, 2),
-                encoder_key_ptb.transpose(1, 2),
-                encoder_value_ptb.transpose(1, 2),
-            )
+        query_ptb, key_ptb, value_ptb = query_ptb.transpose(1, 2), key_ptb.transpose(1, 2), value_ptb.transpose(1, 2)
+        encoder_query_ptb, encoder_key_ptb, encoder_value_ptb = (
+            encoder_query_ptb.transpose(1, 2),
+            encoder_key_ptb.transpose(1, 2),
+            encoder_value_ptb.transpose(1, 2),
+        )
 
-            sequence_length_ptb = query_ptb.size(2)
-            encoder_sequence_length_ptb = encoder_query_ptb.size(2)
+        sequence_length_ptb = query_ptb.size(2)
+        encoder_sequence_length_ptb = encoder_query_ptb.size(2)
 
-            query_ptb = torch.cat([query_ptb, encoder_query_ptb], dim=2)
-            key_ptb = torch.cat([key_ptb, encoder_key_ptb], dim=2)
-            value_ptb = torch.cat([value_ptb, encoder_value_ptb], dim=2)
-            
-            full_sequence_length_ptb = query_ptb.size(2)
-            identity_block_size = query_ptb.size(2) - encoder_query_ptb.size(2)
-            
-            full_mask = torch.zeros((full_sequence_length_ptb, full_sequence_length_ptb), device=query_ptb.device, dtype=query_ptb.dtype)
-            
-            full_mask[:identity_block_size, :identity_block_size] = float("-inf")
-            full_mask[:identity_block_size, :identity_block_size].fill_diagonal_(0)
-            
-            full_mask = full_mask.unsqueeze(0).unsqueeze(0)
+        query_ptb = torch.cat([query_ptb, encoder_query_ptb], dim=2)
+        key_ptb = torch.cat([key_ptb, encoder_key_ptb], dim=2)
+        value_ptb = torch.cat([value_ptb, encoder_value_ptb], dim=2)
 
-            hidden_states_ptb = F.scaled_dot_product_attention(
-                query_ptb, key_ptb, value_ptb, attn_mask=full_mask, dropout_p=0.0, is_causal=False
-            )
-            hidden_states_ptb = hidden_states_ptb.transpose(1, 2).flatten(2, 3)
-            hidden_states_ptb = hidden_states_ptb.to(query_ptb.dtype)
+        full_sequence_length_ptb = query_ptb.size(2)
+        identity_block_size = query_ptb.size(2) - encoder_query_ptb.size(2)
 
-            hidden_states_ptb, encoder_hidden_states_ptb = hidden_states_ptb.split_with_sizes(
-                (sequence_length_ptb, encoder_sequence_length_ptb), dim=1
-            )
+        # Scaled dot-product attention weights 계산
+        attn_weights = torch.matmul(query_ptb, key_ptb.transpose(-2, -1)) / (query_ptb.size(-1) ** 0.5)
 
-            # linear proj
-            hidden_states_ptb = attn.to_out[0](hidden_states_ptb)
-            # dropout
-            hidden_states_ptb = attn.to_out[1](hidden_states_ptb)
+        # Identity block을 identity map으로 설정
+        identity_matrix = torch.eye(identity_block_size, device=query_ptb.device, dtype=query_ptb.dtype)
+        attn_weights[:, :, :identity_block_size, :identity_block_size] = identity_matrix
 
-            if getattr(attn, "to_add_out", None) is not None:
-                encoder_hidden_states_ptb = attn.to_add_out(encoder_hidden_states_ptb)
+        # Softmax를 적용하여 attention 분포를 정규화
+        attn_weights = F.softmax(attn_weights, dim=-1)
 
+        # Attention을 적용하여 hidden states 계산
+        hidden_states_ptb = torch.matmul(attn_weights, value_ptb)
+        hidden_states_ptb = hidden_states_ptb.transpose(1, 2).flatten(2, 3)
+        hidden_states_ptb = hidden_states_ptb.to(query_ptb.dtype)
+
+        hidden_states_ptb, encoder_hidden_states_ptb = hidden_states_ptb.split_with_sizes(
+            (sequence_length_ptb, encoder_sequence_length_ptb), dim=1
+        )
+
+        # linear proj
+        hidden_states_ptb = attn.to_out[0](hidden_states_ptb)
+        # dropout
+        hidden_states_ptb = attn.to_out[1](hidden_states_ptb)
+
+        if getattr(attn, "to_add_out", None) is not None:
+            encoder_hidden_states_ptb = attn.to_add_out(encoder_hidden_states_ptb)
         #--------------------------------------#
 
         hidden_states = torch.cat([hidden_states_org, hidden_states_ptb], dim=0)
@@ -342,7 +391,6 @@ class MochiSTGPipeline(MochiPipeline):
     def replace_layer_processor(self, layers, replace_processor, stg_applied_layers_idx=[]):
         for layer_idx in stg_applied_layers_idx:
             layers[layer_idx][1].processor = replace_processor
-            print(f"[INFO] Replaced {layer_idx}th layer with MochiSTGAttnProcessor2_0.")
 
         return
     
@@ -478,9 +526,13 @@ class MochiSTGPipeline(MochiPipeline):
         self._interrupt = False
 
         if self.do_spatio_temporal_guidance:
-            layers = self.extract_layers()
-            replace_processor = STGMochiAttnProcessor2_0(mode=stg_mode)
-            self.replace_layer_processor(layers, replace_processor, stg_applied_layers_idx)
+            if stg_mode == "STG-A":
+                layers = self.extract_layers()
+                replace_processor = STGMochiAttnProcessor2_0()
+                self.replace_layer_processor(layers, replace_processor, stg_applied_layers_idx)
+            elif stg_mode == "STG-R":
+                for i in stg_applied_layers_idx:
+                    self.transformer.transformer_blocks[i].forward = types.MethodType(forward_with_stg, self.transformer.transformer_blocks[i])
 
         # 2. Define call parameters
         if prompt is not None and isinstance(prompt, str):

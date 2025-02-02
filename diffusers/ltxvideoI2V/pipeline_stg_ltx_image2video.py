@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import types
 import inspect
-from typing import Callable, Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union, Tuple
 
 import numpy as np
 import torch
@@ -45,6 +46,49 @@ else:
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
+def forward_with_stg(
+        self,
+        hidden_states: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
+        temb: torch.Tensor,
+        image_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        encoder_attention_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+    
+        hidden_states_ptb = hidden_states[2:]
+        encoder_hidden_states_ptb = encoder_hidden_states[2:]
+    
+        batch_size = hidden_states.size(0)
+        norm_hidden_states = self.norm1(hidden_states)
+
+        num_ada_params = self.scale_shift_table.shape[0]
+        ada_values = self.scale_shift_table[None, None] + temb.reshape(batch_size, temb.size(1), num_ada_params, -1)
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = ada_values.unbind(dim=2)
+        norm_hidden_states = norm_hidden_states * (1 + scale_msa) + shift_msa
+
+        attn_hidden_states = self.attn1(
+            hidden_states=norm_hidden_states,
+            encoder_hidden_states=None,
+            image_rotary_emb=image_rotary_emb,
+        )
+        hidden_states = hidden_states + attn_hidden_states * gate_msa
+
+        attn_hidden_states = self.attn2(
+            hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            image_rotary_emb=None,
+            attention_mask=encoder_attention_mask,
+        )
+        hidden_states = hidden_states + attn_hidden_states
+        norm_hidden_states = self.norm2(hidden_states) * (1 + scale_mlp) + shift_mlp
+
+        ff_output = self.ff(norm_hidden_states)
+        hidden_states = hidden_states + ff_output * gate_mlp
+
+        hidden_states[2:] = hidden_states_ptb
+        encoder_hidden_states[2:] = encoder_hidden_states_ptb
+    
+        return hidden_states
 
 class STGLTXVideoAttentionProcessor2_0:
     r"""
@@ -52,8 +96,7 @@ class STGLTXVideoAttentionProcessor2_0:
     used in the LTX model. It applies a normalization layer and rotary embedding on the query and key vector.
     """
 
-    def __init__(self, mode="STG-A"):
-        self.mode = mode
+    def __init__(self):
         if not hasattr(F, "scaled_dot_product_attention"):
             raise ImportError(
                 "LTXVideoAttentionProcessor2_0 requires PyTorch 2.0, to use it, please upgrade PyTorch to 2.0."
@@ -118,38 +161,37 @@ class STGLTXVideoAttentionProcessor2_0:
         hidden_states_org = attn.to_out[1](hidden_states_org)
         #----------------------------------------------#
         #--------------Perturbation Path---------------#
-        if self.mode == "STG-A":
-            batch_size, sequence_length, _ = hidden_states_perturb.shape 
+        batch_size, sequence_length, _ = hidden_states_perturb.shape 
 
-            if attention_mask is not None:
-                attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
-                attention_mask = attention_mask.view(batch_size, attn.heads, -1, attention_mask.shape[-1])
+        if attention_mask is not None:
+            attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+            attention_mask = attention_mask.view(batch_size, attn.heads, -1, attention_mask.shape[-1])
 
-            if encoder_hidden_states is None:
-                encoder_hidden_states_perturb = hidden_states_perturb
+        if encoder_hidden_states is None:
+            encoder_hidden_states_perturb = hidden_states_perturb
 
-            query_perturb = attn.to_q(hidden_states_perturb)
-            key_perturb = attn.to_k(encoder_hidden_states_perturb)
-            value_perturb = attn.to_v(encoder_hidden_states_perturb)
+        query_perturb = attn.to_q(hidden_states_perturb)
+        key_perturb = attn.to_k(encoder_hidden_states_perturb)
+        value_perturb = attn.to_v(encoder_hidden_states_perturb)
 
-            query_perturb = attn.norm_q(query_perturb)
-            key_perturb = attn.norm_k(key_perturb)
+        query_perturb = attn.norm_q(query_perturb)
+        key_perturb = attn.norm_k(key_perturb)
 
-            if image_rotary_emb is not None:
-                query_perturb = apply_rotary_emb(query_perturb, image_rotary_emb_perturb)
-                key_perturb = apply_rotary_emb(key_perturb, image_rotary_emb_perturb)
+        if image_rotary_emb is not None:
+            query_perturb = apply_rotary_emb(query_perturb, image_rotary_emb_perturb)
+            key_perturb = apply_rotary_emb(key_perturb, image_rotary_emb_perturb)
 
-            query_perturb = query_perturb.unflatten(2, (attn.heads, -1)).transpose(1, 2)
-            key_perturb = key_perturb.unflatten(2, (attn.heads, -1)).transpose(1, 2)
-            value_perturb = value_perturb.unflatten(2, (attn.heads, -1)).transpose(1, 2)
+        query_perturb = query_perturb.unflatten(2, (attn.heads, -1)).transpose(1, 2)
+        key_perturb = key_perturb.unflatten(2, (attn.heads, -1)).transpose(1, 2)
+        value_perturb = value_perturb.unflatten(2, (attn.heads, -1)).transpose(1, 2)
 
-            hidden_states_perturb = value_perturb
-            
-            hidden_states_perturb = hidden_states_perturb.transpose(1, 2).flatten(2, 3)
-            hidden_states_perturb = hidden_states_perturb.to(query_perturb.dtype)
+        hidden_states_perturb = value_perturb
+        
+        hidden_states_perturb = hidden_states_perturb.transpose(1, 2).flatten(2, 3)
+        hidden_states_perturb = hidden_states_perturb.to(query_perturb.dtype)
 
-            hidden_states_perturb = attn.to_out[0](hidden_states_perturb)
-            hidden_states_perturb = attn.to_out[1](hidden_states_perturb)
+        hidden_states_perturb = attn.to_out[0](hidden_states_perturb)
+        hidden_states_perturb = attn.to_out[1](hidden_states_perturb)
         #----------------------------------------------#
         
         hidden_states = torch.cat([hidden_states_org, hidden_states_perturb], dim=0)
@@ -259,7 +301,6 @@ class LTXImageToVideoSTGPipeline(LTXImageToVideoPipeline):
     def replace_layer_processor(self, layers, replace_processor, target_layers_idx=[]):
         for layer_idx in target_layers_idx:
             layers[layer_idx][1].processor = replace_processor
-            print(f"[INFO] Replaced {layer_idx}th layer with {replace_processor}.")
 
         return
 
@@ -319,9 +360,13 @@ class LTXImageToVideoSTGPipeline(LTXImageToVideoPipeline):
         self._interrupt = False
 
         if self.do_spatio_temporal_guidance:
-            layers = self.extract_layers()
-            replace_processor = STGLTXVideoAttentionProcessor2_0(mode=stg_mode)
-            self.replace_layer_processor(layers, replace_processor, stg_applied_layers_idx)
+            if stg_mode == "STG-A":
+                layers = self.extract_layers()
+                replace_processor = STGLTXVideoAttentionProcessor2_0()
+                self.replace_layer_processor(layers, replace_processor, stg_applied_layers_idx)
+            elif stg_mode == "STG-R":
+                for i in stg_applied_layers_idx:
+                    self.transformer.transformer_blocks[i].forward = types.MethodType(forward_with_stg, self.transformer.transformer_blocks[i])
 
         # 2. Define call parameters
         if prompt is not None and isinstance(prompt, str):

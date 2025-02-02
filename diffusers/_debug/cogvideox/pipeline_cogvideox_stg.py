@@ -104,6 +104,45 @@ def forward_with_stg(
         encoder_hidden_states[2:] = encoder_hidden_states_ptb
 
         return hidden_states, encoder_hidden_states
+    
+def forward_without_stg(
+        self,
+        hidden_states: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
+        temb: torch.Tensor,
+        image_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> torch.Tensor:
+    
+        text_seq_length = encoder_hidden_states.size(1)
+
+        # norm & modulate
+        norm_hidden_states, norm_encoder_hidden_states, gate_msa, enc_gate_msa = self.norm1(
+            hidden_states, encoder_hidden_states, temb
+        )
+
+        # attention
+        attn_hidden_states, attn_encoder_hidden_states = self.attn1(
+            hidden_states=norm_hidden_states,
+            encoder_hidden_states=norm_encoder_hidden_states,
+            image_rotary_emb=image_rotary_emb,
+        )
+
+        hidden_states = hidden_states + gate_msa * attn_hidden_states
+        encoder_hidden_states = encoder_hidden_states + enc_gate_msa * attn_encoder_hidden_states
+
+        # norm & modulate
+        norm_hidden_states, norm_encoder_hidden_states, gate_ff, enc_gate_ff = self.norm2(
+            hidden_states, encoder_hidden_states, temb
+        )
+
+        # feed-forward
+        norm_hidden_states = torch.cat([norm_encoder_hidden_states, norm_hidden_states], dim=1)
+        ff_output = self.ff(norm_hidden_states)
+
+        hidden_states = hidden_states + gate_ff * ff_output[:, text_seq_length:]
+        encoder_hidden_states = encoder_hidden_states + enc_gate_ff * ff_output[:, :text_seq_length]
+
+        return hidden_states, encoder_hidden_states
 
 class STGCogVideoXAttnProcessor2_0:
     r"""
@@ -315,11 +354,12 @@ class CogVideoXSTGPipeline(CogVideoXPipeline):
                     layers.append((name, module))
         return layers
     
-    def replace_layer_processor(self, layers, replace_processor, stg_applied_layers_idx=[]):
-        for layer_idx in stg_applied_layers_idx:
-            layers[layer_idx][1].processor = replace_processor
-
+    def init_layer_processor(self, layers):
+        for layer_idx in range(len(layers)):
+            layers[layer_idx][1].processor = CogVideoXAttnProcessor2_0()
+        print(f"[INFO] Initialized layers with CogVideoXAttnProcessor2_0.")
         return
+
     
     @property
     def do_spatio_temporal_guidance(self):
@@ -465,8 +505,7 @@ class CogVideoXSTGPipeline(CogVideoXPipeline):
 
         if self.do_spatio_temporal_guidance:
             if stg_mode == "STG-A":
-                layers = self.extract_layers()
-                replace_processor = STGCogVideoXAttnProcessor2_0()
+                replace_processor = STGCogVideoXAttnProcessor2_0(mode=stg_mode)
                 self.replace_layer_processor(layers, replace_processor, stg_applied_layers_idx)
             elif stg_mode == "STG-R":
                 for i in stg_applied_layers_idx:
@@ -618,6 +657,13 @@ class CogVideoXSTGPipeline(CogVideoXPipeline):
 
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
+
+        if stg_mode == "STG-A":
+            layers = self.extract_layers()
+            self.init_layer_processor(layers)
+        elif stg_mode == "STG-R":
+            for i in stg_applied_layers_idx:
+                self.transformer.transformer_blocks[i].forward = types.MethodType(forward_without_stg, self.transformer.transformer_blocks[i])
 
         if not output_type == "latent":
             # Discard any padding frames that were added for CogVideoX 1.5

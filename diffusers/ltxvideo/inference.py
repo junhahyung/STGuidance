@@ -1,27 +1,22 @@
 import os
 import torch
 from diffusers import LTXPipeline
-from pipeline_stg_ltx_image2video import LTXImageToVideoSTGPipeline
-from diffusers.utils import export_to_video, load_image
+from pipeline_stg_ltx import LTXSTGPipeline
+from diffusers.utils import export_to_video
 
 ckpt_path = "Lightricks/LTX-Video"
-pipe = LTXImageToVideoSTGPipeline.from_pretrained(ckpt_path, torch_dtype=torch.bfloat16)
+pipe = LTXSTGPipeline.from_pretrained(ckpt_path, torch_dtype=torch.bfloat16)
 pipe.to("cuda")
 
-image = load_image(
-    "https://huggingface.co/datasets/a-r-r-o-w/tiny-meme-dataset-captioned/resolve/main/images/11.png"
-)
-
-prompt = "A medieval fantasy scene featuring a rugged man with shoulder-length brown hair and a beard. He wears a dark leather tunic over a maroon shirt with intricate metal details. His facial expression is serious and intense, and he is making a gesture with his right hand, forming a small circle with his thumb and index finger. The warm golden lighting casts dramatic shadows on his face. The background includes an ornate stone arch and blurred medieval-style decor, creating an epic atmosphere."
+prompt = "A woman with light skin, wearing a blue jacket and a black hat with a veil, looks down and to her right, then back up as she speaks; she has brown hair styled in an updo, light brown eyebrows, and is wearing a white collared shirt under her jacket; the camera remains stationary on her face as she speaks; the background is out of focus, but shows trees and people in period clothing; the scene is captured in real-life footage."
 negative_prompt = "worst quality, inconsistent motion, blurry, jittery, distorted"
 
-stg_mode = "STG-A" # STG-A, STG-R
+stg_mode = "STG-A" # STG-A or STG-R
 stg_applied_layers_idx = [19] # 0~27
-stg_scale = 0.0 # 0.0 for CFG
+stg_scale = 1.0 # 0.0 for CFG
 do_rescaling = True # Default (False)
 
 video = pipe(
-    image=image,
     prompt=prompt,
     negative_prompt=negative_prompt,
     width=480,
