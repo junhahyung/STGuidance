@@ -576,6 +576,15 @@ class HunyuanVideoSTGPipeline(HunyuanVideoPipeline):
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
 
+        if self.do_spatio_temporal_guidance:
+            if stg_mode == "STG-A":
+                layers = self.extract_layers()
+                replace_processor = HunyuanVideoAttnProcessor2_0()
+                self.replace_layer_processor(layers, replace_processor, stg_applied_layers_idx)
+            elif stg_mode == "STG-R":
+                for i in stg_applied_layers_idx:
+                    self.transformer.transformer_blocks[i].forward = types.MethodType(forward_without_stg, self.transformer.transformer_blocks[i])        
+
         if not output_type == "latent":
             latents = latents.to(self.vae.dtype) / self.vae.config.scaling_factor
             video = self.vae.decode(latents, return_dict=False)[0]

@@ -30,4 +30,17 @@ output = pipe(
     do_rescaling=do_rescaling,
     generator=torch.Generator(device="cuda").manual_seed(42),
 ).frames[0]
-export_to_video(output, "output.mp4", fps=15)
+
+if stg_scale == 0:
+    video_name = f"CFG_rescale_{do_rescaling}.mp4"
+else:
+    layers_str = "_".join(map(str, stg_applied_layers_idx))
+    video_name = f"{stg_mode}_scale_{stg_scale}_layers_{layers_str}_rescale_{do_rescaling}.mp4"
+
+# Save video to samples directory
+sample_dir = "samples"
+os.makedirs(sample_dir, exist_ok=True)
+video_path = os.path.join(sample_dir, video_name)
+export_to_video(video, video_path, fps=15)
+
+print(f"Video saved to {video_path}")
