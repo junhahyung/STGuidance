@@ -14,16 +14,16 @@ pipe = CogVideoXSTGPipeline.from_pretrained(ckpt_path, torch_dtype=torch.bfloat1
 
 # Define parameters
 prompt = (
-    "A slow-motion capture of a beautiful woman in a flowing dress spinning in a field of sunflowers, with petals swirling around her, realistic style."
+    "A father and son building a treehouse together, their hands covered in sawdust and smiles on their faces, realistic style."
 )
 
 # prompt = re.sub(r'[^a-zA-Z0-9_\- ]', '_', prompt.strip()) # sanitize prompt
 
 #---------Option---------#
 stg_mode = "STG-A"
-stg_applied_layers_idx = [10] #0 ~ 41
+stg_applied_layers_idx = [11] #0 ~ 41
 stg_scale = 1.0 # 0.0 for CFG (default)
-do_rescaling = True # False (default)
+do_rescaling = False # False (default)
 #------------------------#
 
 guidance_scale = 6
