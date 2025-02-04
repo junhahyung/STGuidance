@@ -29,12 +29,12 @@ pipe.to("cuda")
 
 #--------Option--------#
 stg_mode = "STG-R"
-stg_applied_layers_idx = [i for i in range(40)]
+stg_applied_layers_idx = [i for i in range(20, 40, 2)]
 stg_scales = [1.0, 0.0] # 0.0 for CFG (default)
 do_rescaling = False
 #----------------------#
 
-with open("prompts/prompt1.txt", "r") as f:
+with open("prompts/prompt_cfg_bad.txt", "r") as f:
     prompts = [line.strip() for line in f.readlines() if line.strip()]
 
 for i, prompt in enumerate(prompts):

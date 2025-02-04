@@ -86,7 +86,7 @@ def forward_with_stg(
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         return hidden_states, encoder_hidden_states
     
-def forward_without_stg(
+def forward_without_stg_dual(
         self,
         hidden_states: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
@@ -94,7 +94,6 @@ def forward_without_stg(
         attention_mask: Optional[torch.Tensor] = None,
         freqs_cis: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-    
         # 1. Input normalization
         norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(hidden_states, emb=temb)
         norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self.norm1_context(
@@ -126,6 +125,48 @@ def forward_without_stg(
         hidden_states = hidden_states + gate_mlp.unsqueeze(1) * ff_output
         encoder_hidden_states = encoder_hidden_states + c_gate_mlp.unsqueeze(1) * context_ff_output
 
+        return hidden_states, encoder_hidden_states
+    
+def forward_without_stg_single(
+        self,
+        hidden_states: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
+        temb: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        image_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> torch.Tensor:
+        text_seq_length = encoder_hidden_states.shape[1]
+        hidden_states = torch.cat([hidden_states, encoder_hidden_states], dim=1)
+
+        residual = hidden_states
+
+        # 1. Input normalization
+        norm_hidden_states, gate = self.norm(hidden_states, emb=temb)
+        mlp_hidden_states = self.act_mlp(self.proj_mlp(norm_hidden_states))
+
+        norm_hidden_states, norm_encoder_hidden_states = (
+            norm_hidden_states[:, :-text_seq_length, :],
+            norm_hidden_states[:, -text_seq_length:, :],
+        )
+
+        # 2. Attention
+        attn_output, context_attn_output = self.attn(
+            hidden_states=norm_hidden_states,
+            encoder_hidden_states=norm_encoder_hidden_states,
+            attention_mask=attention_mask,
+            image_rotary_emb=image_rotary_emb,
+        )
+        attn_output = torch.cat([attn_output, context_attn_output], dim=1)
+
+        # 3. Modulation and residual connection
+        hidden_states = torch.cat([attn_output, mlp_hidden_states], dim=2)
+        hidden_states = gate.unsqueeze(1) * self.proj_out(hidden_states)
+        hidden_states = hidden_states + residual
+
+        hidden_states, encoder_hidden_states = (
+            hidden_states[:, :-text_seq_length, :],
+            hidden_states[:, -text_seq_length:, :],
+        )
         return hidden_states, encoder_hidden_states
 
 def retrieve_timesteps(
@@ -518,7 +559,10 @@ class HunyuanVideoSTGPipeline(HunyuanVideoPipeline):
                         self.replace_layer_processor(layers, replace_processor, stg_applied_layers_idx)
                     elif stg_mode == "STG-R":
                         for i in stg_applied_layers_idx:
-                            self.transformer.transformer_blocks[i].forward = types.MethodType(forward_without_stg, self.transformer.transformer_blocks[i])
+                            if i < 20:
+                                self.transformer.transformer_blocks[i].forward = types.MethodType(forward_without_stg_dual, self.transformer.transformer_blocks[i])
+                            elif i >= 20:
+                                self.transformer.single_transformer_blocks[i].forward = types.MethodType(forward_without_stg_single, self.transformer.single_transformer_blocks[i])
 
                 noise_pred_text = self.transformer(
                     hidden_states=latent_model_input,
@@ -537,8 +581,10 @@ class HunyuanVideoSTGPipeline(HunyuanVideoPipeline):
                         replace_processor = STGHunyuanVideoAttnProcessor2_0()
                         self.replace_layer_processor(layers, replace_processor, stg_applied_layers_idx)
                     elif stg_mode == "STG-R":
-                        for i in stg_applied_layers_idx:
-                            self.transformer.transformer_blocks[i].forward = types.MethodType(forward_with_stg, self.transformer.transformer_blocks[i])
+                        if i < 20:
+                                self.transformer.transformer_blocks[i].forward = types.MethodType(forward_with_stg, self.transformer.transformer_blocks[i])
+                        elif i >= 20:
+                            self.transformer.single_transformer_blocks[i].forward = types.MethodType(forward_with_stg, self.transformer.single_transformer_blocks[i])
 
                     noise_pred_perturb = self.transformer(
                         hidden_states=latent_model_input,
@@ -582,8 +628,10 @@ class HunyuanVideoSTGPipeline(HunyuanVideoPipeline):
                 replace_processor = HunyuanVideoAttnProcessor2_0()
                 self.replace_layer_processor(layers, replace_processor, stg_applied_layers_idx)
             elif stg_mode == "STG-R":
-                for i in stg_applied_layers_idx:
-                    self.transformer.transformer_blocks[i].forward = types.MethodType(forward_without_stg, self.transformer.transformer_blocks[i])        
+                if i < 20:
+                    self.transformer.transformer_blocks[i].forward = types.MethodType(forward_without_stg_dual, self.transformer.transformer_blocks[i])
+                elif i >= 20:
+                    self.transformer.single_transformer_blocks[i].forward = types.MethodType(forward_without_stg_single, self.transformer.single_transformer_blocks[i])
 
         if not output_type == "latent":
             latents = latents.to(self.vae.dtype) / self.vae.config.scaling_factor
