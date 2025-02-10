@@ -547,6 +547,19 @@ class HunyuanVideoSTGPipeline(HunyuanVideoPipeline):
                 if self.interrupt:
                     continue
                 
+                latent_path = f"latent/{sanitize_and_truncate(prompt)}.pt"
+                if os.path.exists(latent_path) and i <= visualize_step:
+                    if i < visualize_step:
+                        progress_bar.update()
+                        continue
+                    latents = torch.load(latent_path)
+                    print(f"[INFO] Loaded latents from {latent_path}")
+                    continue
+                else:
+                    if i == visualize_step:
+                        torch.save(latents, latent_path)
+                        print(f"[INFO] Saved latents to {latent_path}")
+                
                 latent_model_input = latents.to(transformer_dtype)
                     
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML

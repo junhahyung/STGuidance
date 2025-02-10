@@ -1,4 +1,5 @@
 # Adapted from: https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_alpha.py
+import types
 import html
 import inspect
 import math
@@ -166,140 +167,116 @@ def retrieve_timesteps(
         timesteps = scheduler.timesteps
     return timesteps, num_inference_steps
 
-class STGResidualProcessor:
-    r"""
-    Processor for implementing scaled dot-product attention (enabled by default if you're using PyTorch 2.0).
-    """
-
-    def __init__(self):
-        pass
-
-    def __call__(
+def forward_with_stg(
         self,
-        attn: Attention,
         hidden_states: torch.FloatTensor,
-        freqs_cis: Tuple[torch.FloatTensor, torch.FloatTensor],
-        encoder_hidden_states: Optional[torch.FloatTensor] = None,
+        freqs_cis: Optional[Tuple[torch.FloatTensor, torch.FloatTensor]] = None,
         attention_mask: Optional[torch.FloatTensor] = None,
-        temb: Optional[torch.FloatTensor] = None,
-        *args,
-        **kwargs,
+        encoder_hidden_states: Optional[torch.FloatTensor] = None,
+        encoder_attention_mask: Optional[torch.FloatTensor] = None,
+        timestep: Optional[torch.LongTensor] = None,
+        cross_attention_kwargs: Dict[str, Any] = None,
+        class_labels: Optional[torch.LongTensor] = None,
+        added_cond_kwargs: Optional[Dict[str, torch.Tensor]] = None,
     ) -> torch.FloatTensor:
-        if len(args) > 0 or kwargs.get("scale", None) is not None:
-            deprecation_message = "The `scale` argument is deprecated and will be ignored. Please remove it, as passing it will raise an error in the future. `scale` should directly be passed while calling the underlying pipeline component i.e., via `cross_attention_kwargs`."
-            deprecate("scale", "1.0.0", deprecation_message)
-
-        residual = hidden_states
-        if attn.spatial_norm is not None:
-            hidden_states = attn.spatial_norm(hidden_states, temb)
-
-        input_ndim = hidden_states.ndim
-
-        if input_ndim == 4:
-            batch_size, channel, height, width = hidden_states.shape
-            hidden_states = hidden_states.view(
-                batch_size, channel, height * width
-            ).transpose(1, 2)
-
-        hidden_states_uncond, hidden_states_cond, hidden_states_ptb = hidden_states.chunk(3)
-        hidden_states = torch.cat([hidden_states_uncond, hidden_states_cond])
-
-        freqs_cis_1, freqs_cis_2 = freqs_cis
-        freqs_cis_1_uncond, freqs_cis_1_cond, freqs_cis_1_perturb = freqs_cis_1.chunk(3)
-        freqs_cis_2_uncond, freqs_cis_2_cond, freqs_cis_2_perturb = freqs_cis_2.chunk(3)
-
-        freqs_cis_1 = torch.cat([freqs_cis_1_uncond, freqs_cis_1_cond])
-        freqs_cis_2 = torch.cat([freqs_cis_2_uncond, freqs_cis_2_cond])
-
-        freqs_cis = (freqs_cis_1, freqs_cis_2)
-
-        batch_size, sequence_length, _ = (
-            hidden_states.shape
-            if encoder_hidden_states is None
-            else encoder_hidden_states.shape
-        )
-
-        if (attention_mask is not None) and (not attn.use_tpu_flash_attention):
-            attention_mask = attn.prepare_attention_mask(
-                attention_mask, sequence_length, batch_size
-            )
-            # scaled_dot_product_attention expects attention_mask shape to be
-            # (batch, heads, source_length, target_length)
-            attention_mask = attention_mask.view(
-                batch_size, attn.heads, -1, attention_mask.shape[-1]
-            )
-
-        if attn.group_norm is not None:
-            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(
-                1, 2
-            )
-
-        query = attn.to_q(hidden_states)
-        query = attn.q_norm(query)
-
-        if encoder_hidden_states is not None:
-            if attn.norm_cross:
-                encoder_hidden_states = attn.norm_encoder_hidden_states(
-                    encoder_hidden_states
+        if cross_attention_kwargs is not None:
+            if cross_attention_kwargs.get("scale", None) is not None:
+                logger.warning(
+                    "Passing `scale` to `cross_attention_kwargs` is depcrecated. `scale` will be ignored."
                 )
-            key = attn.to_k(encoder_hidden_states)
-            key = attn.k_norm(key)
-        else:  # if no context provided do self-attention
-            encoder_hidden_states = hidden_states
-            key = attn.to_k(hidden_states)
-            key = attn.k_norm(key)
-            if attn.use_rope:
-                key = attn.apply_rotary_emb(key, freqs_cis)
-                query = attn.apply_rotary_emb(query, freqs_cis)
+        hidden_states_perturb = hidden_states[2:]
+        # Notice that normalization is always applied before the real computation in the following blocks.
+        # 0. Self-Attention
+        batch_size = hidden_states.shape[0]
 
-        value = attn.to_v(encoder_hidden_states)
+        norm_hidden_states = self.norm1(hidden_states)
 
-        inner_dim = key.shape[-1]
-        head_dim = inner_dim // attn.heads
-
-        query = query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-        key = key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-        value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-
-        # the output of sdp = (batch, num_heads, seq_len, head_dim)
-
-        if attn.use_tpu_flash_attention:  # use tpu attention offload 'flash attention'
-            assert False, "Flash Attention not supported in STG"
+        # Apply ada_norm_single
+        if self.adaptive_norm in ["single_scale_shift", "single_scale"]:
+            assert timestep.ndim == 3  # [batch, 1 or num_tokens, embedding_dim]
+            num_ada_params = self.scale_shift_table.shape[0]
+            ada_values = self.scale_shift_table[None, None] + timestep.reshape(
+                batch_size, timestep.shape[1], num_ada_params, -1
+            )
+            if self.adaptive_norm == "single_scale_shift":
+                shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
+                    ada_values.unbind(dim=2)
+                )
+                norm_hidden_states = norm_hidden_states * (1 + scale_msa) + shift_msa
+            else:
+                scale_msa, gate_msa, scale_mlp, gate_mlp = ada_values.unbind(dim=2)
+                norm_hidden_states = norm_hidden_states * (1 + scale_msa)
+        elif self.adaptive_norm == "none":
+            scale_msa, gate_msa, scale_mlp, gate_mlp = None, None, None, None
         else:
-            hidden_states = F.scaled_dot_product_attention(
-                query,
-                key,
-                value,
-                attn_mask=attention_mask,
-                dropout_p=0.0,
-                is_causal=False,
-            )
+            raise ValueError(f"Unknown adaptive norm type: {self.adaptive_norm}")
 
-        hidden_states = hidden_states.transpose(1, 2).reshape(
-            batch_size, -1, attn.heads * head_dim
+        norm_hidden_states = norm_hidden_states.squeeze(
+            1
+        )  # TODO: Check if this is needed
+
+        # 1. Prepare GLIGEN inputs
+        cross_attention_kwargs = (
+            cross_attention_kwargs.copy() if cross_attention_kwargs is not None else {}
         )
-        hidden_states = hidden_states.to(query.dtype)
 
-        # linear proj
-        hidden_states = attn.to_out[0](hidden_states)
-        # dropout
-        hidden_states = attn.to_out[1](hidden_states)
+        attn_output = self.attn1(
+            norm_hidden_states,
+            freqs_cis=freqs_cis,
+            encoder_hidden_states=(
+                encoder_hidden_states if self.only_cross_attention else None
+            ),
+            attention_mask=attention_mask,
+            **cross_attention_kwargs,
+        )
+        if gate_msa is not None:
+            attn_output = gate_msa * attn_output
 
-        if input_ndim == 4:
-            hidden_states = hidden_states.transpose(-1, -2).reshape(
-                batch_size, channel, height, width
+        hidden_states = attn_output + hidden_states
+        if hidden_states.ndim == 4:
+            hidden_states = hidden_states.squeeze(1)
+
+        # 3. Cross-Attention
+        if self.attn2 is not None:
+            if self.adaptive_norm == "none":
+                attn_input = self.attn2_norm(hidden_states)
+            else:
+                attn_input = hidden_states
+            attn_output = self.attn2(
+                attn_input,
+                freqs_cis=freqs_cis,
+                encoder_hidden_states=encoder_hidden_states,
+                attention_mask=encoder_attention_mask,
+                **cross_attention_kwargs,
             )
+            hidden_states = attn_output + hidden_states
 
-        hidden_states = torch.cat([hidden_states, hidden_states_ptb])
-        freqs_cis_1 = torch.cat([freqs_cis_1_uncond, freqs_cis_1_cond, freqs_cis_1_perturb])
-        freqs_cis_2 = torch.cat([freqs_cis_2_uncond, freqs_cis_2_cond, freqs_cis_2_perturb])
+        # 4. Feed-forward
+        norm_hidden_states = self.norm2(hidden_states)
+        if self.adaptive_norm == "single_scale_shift":
+            norm_hidden_states = norm_hidden_states * (1 + scale_mlp) + shift_mlp
+        elif self.adaptive_norm == "single_scale":
+            norm_hidden_states = norm_hidden_states * (1 + scale_mlp)
+        elif self.adaptive_norm == "none":
+            pass
+        else:
+            raise ValueError(f"Unknown adaptive norm type: {self.adaptive_norm}")
 
-        freqs_cis = (freqs_cis_1, freqs_cis_2)
+        if self._chunk_size is not None:
+            # "feed_forward_chunk_size" can be used to save memory
+            ff_output = _chunked_feed_forward(
+                self.ff, norm_hidden_states, self._chunk_dim, self._chunk_size
+            )
+        else:
+            ff_output = self.ff(norm_hidden_states)
+        if gate_mlp is not None:
+            ff_output = gate_mlp * ff_output
 
-        if attn.residual_connection:
-            hidden_states = hidden_states + residual
-
-        hidden_states = hidden_states / attn.rescale_output_factor
+        hidden_states = ff_output + hidden_states
+        if hidden_states.ndim == 4:
+            hidden_states = hidden_states.squeeze(1)
+            
+        hidden_states[2:] = hidden_states_perturb
 
         return hidden_states
 
@@ -1235,16 +1212,18 @@ class LTXVideoPipeline(DiffusionPipeline):
 
         do_spatio_temporal_guidance = stg_scale > 0.0
         if do_spatio_temporal_guidance:
-            layers = self.extract_layers()
             if stg_mode == "stg-r":
-                replace_processor = STGResidualProcessor()
-            elif stg_mode == "stg-a":
-                replace_processor = STGAttentionProcessor()
+                for i in stg_block_idx:
+                    self.transformer.transformer_blocks[i].forward = types.MethodType(forward_with_stg, self.transformer.transformer_blocks[i])
             else:
-                assert False, "Invalid stg mode"
-            self.replace_layer_processor(layers, 
-                                        stg_block_idx,
-                                        replace_processor)
+                layers = self.extract_layers()
+                if stg_mode == "stg-a":
+                    replace_processor = STGAttentionProcessor()
+                else:
+                    assert False, "Invalid stg mode"
+                self.replace_layer_processor(layers, 
+                                            stg_block_idx,
+                                            replace_processor)
 
         # 3. Encode input prompt
         (
