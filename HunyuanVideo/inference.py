@@ -15,7 +15,7 @@ pipe.to("cuda")
 #--------Option--------#
 stg_mode = "STG"
 stg_applied_layers_idx = [2]
-stg_scale = 0.0
+stg_scale = 1.0
 do_rescaling = False
 #----------------------#
 

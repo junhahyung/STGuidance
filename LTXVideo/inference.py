@@ -13,7 +13,7 @@ negative_prompt = "worst quality, inconsistent motion, blurry, jittery, distorte
 
 stg_mode = "STG"
 stg_applied_layers_idx = [19] # 0~27
-stg_scale = 0.0 # 0.0 for CFG
+stg_scale = 1.0 # 0.0 for CFG
 do_rescaling = False
 
 video = pipe(

@@ -20,7 +20,7 @@ pipe = pipe.to("cuda")
 prompt = "A close-up of a beautiful woman's face with colored powder exploding around her, creating an abstract splash of vibrant hues, realistic style."
 stg_applied_layers_idx = [34]
 stg_mode = "STG"
-stg_scale = 0.0 # 0.0 for CFG (default)
+stg_scale = 1.0 # 0.0 for CFG (default)
 do_rescaling = False # False (default)
 #----------------------#
 
