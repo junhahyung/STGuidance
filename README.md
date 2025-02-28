@@ -1,4 +1,4 @@
-# 🚀Spatiotemporal Skip Guidance for Enhanced Video Diffusion Sampling✨
+# 🚀[CVPR 2025] Spatiotemporal Skip Guidance for Enhanced Video Diffusion Sampling✨
 
 ## 📑Paper
 - Arxiv: [Spatiotemporal Skip Guidance for Enhanced Video Diffusion Sampling](https://arxiv.org/abs/2411.18664)
