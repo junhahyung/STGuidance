@@ -144,3 +144,14 @@ This project is built upon the following works:
 - [LTX-Video](https://github.com/Lightricks/LTX-Video)
 - [diffusers](https://github.com/huggingface/diffusers)
 
+## 📖 BibTeX
+
+```bibtex
+@article{hyung2024spatiotemporal,
+  title={Spatiotemporal Skip Guidance for Enhanced Video Diffusion Sampling},
+  author={Hyung, Junha and Kim, Kinam and Hong, Susung and Kim, Min-Jung and Choo, Jaegul},
+  journal={arXiv preprint arXiv:2411.18664},
+  year={2024}
+}
+
+
