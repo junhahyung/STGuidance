@@ -6,6 +6,19 @@
 ## 🌐Project Page
 - [STG Project Page](https://junhahyung.github.io/STGuidance)
 
+## 📰 News
+- **[2025.03.08]** 🚀 **STG is now integrated into the Diffusers community pipeline!**  
+  👉 [Check it out on Hugging Face](https://github.com/huggingface/diffusers/tree/main/examples/community)
+
+- **[2025.02.07]** 🏆 **STG officially accepted to CVPR 2025!**  
+  🎤 Stay tuned for our presentation at the conference.
+
+- **[2024.12.20]** 🔥 **STG added to LTXVideo’s official repository!**  
+  📂 Now part of [LTXVideo’s main repository](https://github.com/Lightricks/ComfyUI-LTXVideo).
+
+- **[2024.12.19]** 🖥️ **ComfyUI STG support for LTXVideo!**  
+  🎬 Implemented in **ComfyUI**, enhancing **LTXVideo** support.
+
 ## 🎥Video Examples
 Below are example videos showcasing the enhanced video quality achieved through STG:
 
