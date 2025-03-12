@@ -72,8 +72,10 @@ def forward_with_stg(
         image_rotary_emb: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
 
-        hidden_states_ptb = hidden_states[2:]
-        encoder_hidden_states_ptb = encoder_hidden_states[2:]
+        num_prompt = hidden_states.size(0) // 3
+        hidden_states_ptb = hidden_states[2*num_prompt:]
+        encoder_hidden_states_ptb = encoder_hidden_states[2*num_prompt:]
+        
         norm_hidden_states, gate_msa, scale_mlp, gate_mlp = self.norm1(hidden_states, temb)
 
         if not self.context_pre_only:
@@ -107,8 +109,8 @@ def forward_with_stg(
                 context_ff_output, torch.tanh(enc_gate_mlp).unsqueeze(1)
             )
 
-            hidden_states[2:] = hidden_states_ptb
-            encoder_hidden_states[2:] = encoder_hidden_states_ptb
+        hidden_states[2*num_prompt:] = hidden_states_ptb
+        encoder_hidden_states[2*num_prompt:] = encoder_hidden_states_ptb
 
         return hidden_states, encoder_hidden_states
 

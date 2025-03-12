@@ -80,9 +80,10 @@ def forward_with_stg(
         image_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-    
-        hidden_states_ptb = hidden_states[2:]
-        encoder_hidden_states_ptb = encoder_hidden_states[2:]
+        
+        num_prompt = hidden_states.size(0) // 3
+        hidden_states_ptb = hidden_states[2*num_prompt:]
+        encoder_hidden_states_ptb = encoder_hidden_states[2*num_prompt:]
     
         batch_size = hidden_states.size(0)
         norm_hidden_states = self.norm1(hidden_states)
@@ -111,8 +112,8 @@ def forward_with_stg(
         ff_output = self.ff(norm_hidden_states)
         hidden_states = hidden_states + ff_output * gate_mlp
 
-        hidden_states[2:] = hidden_states_ptb
-        encoder_hidden_states[2:] = encoder_hidden_states_ptb
+        hidden_states[2*num_prompt:] = hidden_states_ptb
+        encoder_hidden_states[2*num_prompt:] = encoder_hidden_states_ptb
     
         return hidden_states
 
